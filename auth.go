@@ -6,10 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
-
-	"github.com/gorilla/mux"
 )
 
 type session struct {
@@ -24,13 +23,14 @@ type sessionInfo struct {
 
 func (a *App) InitializeAuth() {
 	s := session{}
+	s.sessions = make(map[string]sessionInfo)
 	a.Router.Use(s.Authenticate)
 
 	a.Router.HandleFunc("/login", s.login).Methods("GET")
-	// a.Router.HandleFunc("/callback", s.callback)
 	a.Router.Path("/callback").
 		Queries("code", "", "state", "").
-		HandlerFunc(s.callback)
+		HandlerFunc(s.callback).
+		Methods("GET")
 }
 
 func (s *session) Authenticate(next http.Handler) http.Handler {
@@ -46,9 +46,13 @@ func (s *session) Authenticate(next http.Handler) http.Handler {
 }
 
 func (s *session) login(w http.ResponseWriter, r *http.Request) {
-	session := r.Header.Get("session")
+	session, err := r.Cookie("session")
+	if err != nil {
+		log.Println(err)
+		return
+	}
 	hasher := sha256.New()
-	hasher.Write([]byte(session))
+	hasher.Write([]byte(session.Value))
 	state := base64.URLEncoding.EncodeToString(hasher.Sum(nil))
 
 	http.Redirect(w, r,
@@ -61,24 +65,29 @@ func (s *session) login(w http.ResponseWriter, r *http.Request) {
 			"&prompt=consent", http.StatusTemporaryRedirect)
 }
 
+type callbackRequest struct {
+	session string
+}
+
 func (s *session) callback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
 
-	code := mux.Vars(r)["code"]
-
-	var body map[string]string
-
-	println("3")
-	println(s.sessions)
-
-	session := body["session"]
+	code := r.FormValue("code")
+	state := r.FormValue("state")
+	session, err := r.Cookie("session")
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	println(code, state, session.Value)
 
 	accessToken, refreshToken, err := getAccessToken(code)
 	if err != nil {
-		s.sessions[session] = sessionInfo{accessToken, refreshToken, time.Now()}
+		log.Println(err)
+		return
 	}
-	println("4")
-	println(s.sessions)
+	s.sessions[session.Value] = sessionInfo{accessToken, refreshToken, time.Now()}
+	fmt.Println("map:", s.sessions)
 }
 
 type AuthTokenRequestBody struct {
